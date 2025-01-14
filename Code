@@ -1,0 +1,193 @@
+import tkinter as tk
+from tkinter import ttk, filedialog
+import os
+import matplotlib.pyplot as plt
+import numpy as np
+import netCDF4 as nc
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import requests
+
+def browse_directory():
+    """Open a dialog to select a directory and update the entry widget."""
+    directory = filedialog.askdirectory()
+    if directory:
+        save_dir_var.set(directory)
+
+def on_run_click():
+    """Run the script with selected inputs."""
+    year = int(year_var.get())
+    month = int(month_var.get())
+    save_dir = save_dir_var.get()
+    var = var_var.get()
+    lat = float(lat_var.get())
+    lon = float(lon_var.get())
+    radius_km = float(radius_var.get())  # Ensure it's treated as a float for radius
+    
+    # Download and process the data
+    try:
+        file_path = download_data(year, month, save_dir, var)
+        plot_var(file_path, lat, lon, radius_km, var, year, month)
+    except FileNotFoundError as e:
+        print(e)
+    except KeyError as e:
+        print(f"Missing expected variable in the NetCDF file: {e}")
+
+def download_data(year, month, save_dir, var):
+    """Download data from the NOAA SSMI/SSMIS Hydrological Products API."""
+    base_url = "https://www.ncei.noaa.gov/data/ssmi-ssmis-hydrological-products/access/netcdf/{year}/{month:02d}/"
+    file_name = f"mw-hydro_v01_2.5-deg_{var}_late_{year}{month:02d}.nc"
+    
+    # Format the URL with year and month
+    file_url = base_url.format(year=year, month=month) + file_name
+
+    # Download the file
+    response = requests.get(file_url)
+    if response.status_code == 200:
+        # Save the file to the specified directory
+        file_path = os.path.join(save_dir, file_name)
+        with open(file_path, "wb") as f:
+            f.write(response.content)
+        return file_path
+    else:
+        raise FileNotFoundError(f"Failed to download the file: {file_url} - Status Code: {response.status_code}")
+
+def find_nearest(array, value):
+    """Find the index of the nearest value in an array."""
+    array = np.asarray(array)
+    idx = (np.abs(array - value)).argmin()
+    return idx
+
+def compute_bounding_box(lat, lon, distance_km):
+    """Compute the bounding box coordinates (north, south, east, west)."""
+    delta_deg = distance_km / 111  # Approximation: 1 degree ~ 111 km
+    north = lat + delta_deg
+    south = lat - delta_deg
+    east = lon + delta_deg / np.cos(np.radians(lat))
+    west = lon - delta_deg / np.cos(np.radians(lat))
+    return north, south, east, west
+
+def plot_var(file_path, lat, lon, radius_km, var, year, month):
+    """Plot the selected variable."""
+    # Example: Open a mock NetCDF file and plot data (replace with actual file handling)
+    dataset = nc.Dataset(file_path)
+    print(dataset)
+    # Hard-coded mapping for variable names and units
+    var_mapping = {
+        "cfr": ("cloud_fraction", "Cloud fraction (0–1.0)"),
+        "ice": ("sea_ice_cover", "Sea-ice cover (0–100 percent)"),
+        "lwp": ("liquid_water_path", "Liquid water path (1000 * mm)"),
+        "pf1": ("rain_fraction_alg1", "Rain fraction (0–1.0)"), # using 85 GHz scattering algorithm over land
+        "pf2": ("rain_fraction_alg2", "Rain fraction (0–1.0)"), # using 37 GHz scattering algorithm over land, emission over ocean
+        "pr1": ("rainfall_alg1", "Rainfall (mm)"), # using ALG#1
+        "pr2": ("rainfall_alg2", "Rainfall (mm)"), # using ALG#2
+        "snw": ("snow_cover_fraction", "Snow cover fraction (0–1.0)"),
+        "ssa": ("sampling_fraction", "Sampling fraction (0–1.0)"),
+        "wvp": ("total_precipitable_water", "Total precipitable water (mm)")
+    }
+
+    var_name, var_units = var_mapping.get(var, (var, "units"))
+    lats = dataset.variables['lat'][:]
+    lons = dataset.variables['lon'][:]
+    var_data = dataset.variables[var_name][0, :, :]
+
+    # Compute bounding box
+    north, south, east, west = compute_bounding_box(lat, lon, radius_km)
+
+    # Find indices for the bounding box
+    lat_min_idx = find_nearest(lats, south)
+    lat_max_idx = find_nearest(lats, north)
+    lon_min_idx = find_nearest(lons, west)
+    lon_max_idx = find_nearest(lons, east)
+
+    # Subset the data
+    var_subset = var_data[lat_min_idx:lat_max_idx+1, lon_min_idx:lon_max_idx+1]
+    lats_subset = lats[lat_min_idx:lat_max_idx+1]
+    lons_subset = lons[lon_min_idx:lon_max_idx+1]
+
+    # Create a new figure window for the plot
+    plt.figure(figsize=(10, 8))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    ax.set_extent([west, east, south, north], crs=ccrs.PlateCarree())
+
+    # Add features to the map
+    ax.add_feature(cfeature.LAND, zorder=0, edgecolor='black')
+    ax.add_feature(cfeature.COASTLINE)
+
+    # Plot data
+    var_plot = ax.pcolormesh(lons_subset, lats_subset, var_subset, cmap='viridis', transform=ccrs.PlateCarree())
+
+    # Add a black cross marker at the given latitude and longitude
+    ax.scatter(lon, lat, color='black', marker='x', s=100, transform=ccrs.PlateCarree())
+
+    # Add color bar
+    cbar = plt.colorbar(var_plot, ax=ax, orientation='vertical', shrink=0.7, pad=0.05)
+    cbar.set_label(f'{var_units}')
+
+    # Add title
+    plt.title(f"{var} around ({lat}, {lon}) - {radius_km} km radius\nDate:{year}/{month:02d}")
+    plt.show()
+
+# Create the main window
+root = tk.Tk()
+root.title("Satellite Data Download and Plot © Hatem Yazidi, 2025")
+root.geometry("800x400")  # Adjust the window size as needed
+
+# Define StringVar for dynamic updates
+year_var = tk.StringVar(value="2024")
+month_var = tk.StringVar(value="1")
+save_dir_var = tk.StringVar()
+lat_var = tk.StringVar(value="45.0")  # Default latitude
+lon_var = tk.StringVar(value="-75.0")  # Default longitude
+var_var = tk.StringVar(value="wvp")
+radius_var = tk.StringVar(value="100")  # Default radius is 100 km
+
+# Create a frame for the GUI layout
+frame = ttk.Frame(root, padding="20")
+frame.grid(row=0, column=0, sticky="nsew")
+
+# Year Entry
+ttk.Label(frame, text="Year:").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+year_entry = ttk.Entry(frame, textvariable=year_var, width=15)
+year_entry.grid(row=0, column=1, padx=10, pady=5)
+
+# Month Entry
+ttk.Label(frame, text="Month:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+month_entry = ttk.Entry(frame, textvariable=month_var, width=15)
+month_entry.grid(row=1, column=1, padx=10, pady=5)
+
+# Latitude Entry
+ttk.Label(frame, text="Latitude:").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+lat_entry = ttk.Entry(frame, textvariable=lat_var, width=15)
+lat_entry.grid(row=2, column=1, padx=10, pady=5)
+
+# Longitude Entry
+ttk.Label(frame, text="Longitude:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+lon_entry = ttk.Entry(frame, textvariable=lon_var, width=15)
+lon_entry.grid(row=3, column=1, padx=10, pady=5)
+
+# Radius Entry (added as a text entry)
+ttk.Label(frame, text="Radius (km):").grid(row=4, column=0, sticky="w", padx=10, pady=5)
+radius_entry = ttk.Entry(frame, textvariable=radius_var, width=15)
+radius_entry.grid(row=4, column=1, padx=10, pady=5)
+
+# Save Directory Browse Button
+ttk.Label(frame, text="Save Directory:").grid(row=5, column=0, sticky="w", padx=10, pady=10)
+save_dir_entry = ttk.Entry(frame, textvariable=save_dir_var, width=50)
+save_dir_entry.grid(row=5, column=1, padx=10, pady=5)
+browse_button = ttk.Button(frame, text="Browse", command=browse_directory)
+browse_button.grid(row=5, column=2, padx=10, pady=5)
+
+# Variable Selection Drop-down Menu
+ttk.Label(frame, text="Variable:").grid(row=6, column=0, sticky="w", padx=10, pady=5)
+var_choices = ["cfr", "ice", "lwp", "pf1", "pf2", "pr1", "pr2", "snw", "ssa", "wvp"]
+var_menu = ttk.Combobox(frame, textvariable=var_var, values=var_choices, state="readonly")
+var_menu.grid(row=6, column=1, padx=10, pady=5)
+
+# Run Button
+run_button = ttk.Button(frame, text="Run", command=on_run_click)
+run_button.grid(row=7, column=0, padx=10, pady=10)
+
+
+# Start the GUI main loop
+root.mainloop()
