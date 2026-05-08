@@ -1,3 +1,20 @@
+"""
+Hi, 
+
+Code Disclaimer
+
+This code is provided for research and informational purposes only. 
+While every effort has been made to ensure its accuracy and reliability, 
+no guarantee is given that the code is free from errors or suitable for all applications. 
+Users are responsible for verifying results and adapting the code to their specific needs.
+
+The author assumes no liability for any damages or losses arising from the use or misuse of this code. 
+Use at your own risk. This code may contain experimental features and is subject to change without notice. 
+It is not intended for operational or safety-critical use without independent validation.
+
+Author: Hatem Yazidi
+
+"""
 import tkinter as tk
 from tkinter import ttk, filedialog
 import os
